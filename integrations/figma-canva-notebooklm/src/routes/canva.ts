@@ -1,6 +1,8 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import path from 'path';
+import fs from 'fs/promises';
+import { saveToken, getToken } from '../lib/tokenStore';
 
 const router = express.Router();
 
@@ -49,18 +51,46 @@ router.get('/auth/callback', async (req, res) => {
       body
     });
 
+    if (!tokenResp.ok) {
+      const txt = await tokenResp.text();
+      console.error('Canva token exchange failed:', tokenResp.status, txt);
+      return res.status(500).send('token exchange failed');
+    }
+
     const tokenJson = await tokenResp.json();
-    // Persist token securely in production (DB). For demo, return it in response.
-    res.json({ token: tokenJson });
+    // Persist token securely in production. For dev, store locally in .data (ignored by git).
+    await saveToken('canva', { token: tokenJson, createdAt: Date.now() });
+
+    res.json({ ok: true, note: 'Token saved to .data/tokens.json (local dev). Do not commit secrets.' });
   } catch (err) {
     console.error('Error exchanging Canva token:', err);
     res.status(500).send('token exchange failed');
   }
 });
 
-// Serve embed demo page
-router.get('/embed', (req, res) => {
-  res.sendFile('canva.html', { root: path.join(__dirname, '..', '..', 'public') });
+// Retrieve stored token for dev/testing
+router.get('/token', async (req, res) => {
+  try {
+    const token = await getToken('canva');
+    if (!token) return res.status(404).send('no token stored');
+    return res.json({ token });
+  } catch (err) {
+    console.error('Error reading token', err);
+    res.status(500).send('error');
+  }
+});
+
+// Serve embed demo page with CANVA_EMBED_SCRIPT_URL replaced from env
+router.get('/embed', async (req, res) => {
+  try {
+    const file = path.join(__dirname, '..', '..', 'public', 'canva.html');
+    let html = await fs.readFile(file, 'utf8');
+    html = html.replace('%%CANVA_EMBED_SCRIPT_URL%%', process.env.CANVA_EMBED_SCRIPT_URL || '');
+    res.send(html);
+  } catch (err) {
+    console.error('Failed to serve embed page', err);
+    res.status(500).send('embed not available');
+  }
 });
 
 export default router;
